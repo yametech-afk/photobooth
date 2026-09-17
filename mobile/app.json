@@ -31,7 +31,18 @@
     "plugins": [
       "expo-camera",
       "expo-image-picker",
-      "expo-media-library"
+      "expo-media-library",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34,
+            "buildToolsVersion": "34.0.0",
+            "minSdkVersion": 24
+          }
+        }
+      ]
     ],
     "extra": {
       "eas": {

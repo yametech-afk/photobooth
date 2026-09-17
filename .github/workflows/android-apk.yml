@@ -116,7 +116,7 @@ jobs:
           unset npm_config_workspace
           unset npm_config_workspaces
 
-          npm install --workspaces=false --no-audit --no-fund
+          npm ci --workspaces=false --no-audit --no-fund
 
           if [ ! -d node_modules/expo ]; then
             echo "::error::Expo was not installed in mobile/node_modules"
@@ -135,6 +135,21 @@ jobs:
           CI: '1'
           EXPO_NO_TELEMETRY: '1'
         run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Pin compatible Gradle wrapper version (SDK 50 / RN 0.73.6)
+        working-directory: mobile/android
+        run: |
+          set -eu
+          # Ang Expo SDK 50 + RN 0.73.6 prebuild ay gumagawa ng Gradle 8.3 wrapper
+          # (AGP 8.1.x) - iyon ang compatible pair ng SDK 50 toolchain.
+          # I-pin nang tahasan para hindi ito tahimik na mabago ng susunod na
+          # prebuild/tooling upgrade.
+          # Sinadya na `sed` (hindi `./gradlew wrapper`): kahit ang `wrapper` task ay
+          # nag-e-evaluate pa rin ng :expo-font project, kaya maaaring mabigo ang pin
+          # step mismo para sa parehong dahilan na inaayos natin. Deterministic at
+          # offline-safe ito.
+          sed -i 's|^distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.3-all.zip|' gradle/wrapper/gradle-wrapper.properties
+          grep -n 'distributionUrl' gradle/wrapper/gradle-wrapper.properties
 
       - name: Inject upload keystore (kapag may secrets)
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
