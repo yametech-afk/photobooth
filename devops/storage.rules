@@ -1,0 +1,58 @@
+rules_version = '2';
+
+// ============================================================
+// Photobooth platform — Cloud Storage security rules
+// Bucket = <project>.firebasestorage.app
+// ============================================================
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isSelf(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.get('admin', false) == true;
+    }
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    function under(limitMb) {
+      return request.resource.size < limitMb * 1024 * 1024;
+    }
+
+    // User photo library: <uid>/originals, <uid>/filtered, <uid>/prints
+    match /photos/{userId}/{path=**} {
+      allow read: if isSelf(userId) || isAdmin();
+      allow create: if isSelf(userId) && isImage() && under(10);
+      allow update: if isSelf(userId) && isImage() && under(10);
+      allow delete: if isSelf(userId) || isAdmin();
+    }
+
+    // Event gallery — attendees of a published event may upload, owner may manage
+    match /events/{eventId}/{path=**} {
+      allow read: if true;
+      allow create: if isSignedIn() && isImage() && under(10);
+      allow update, delete: if isSignedIn() && (isAdmin() || request.auth.uid == eventId);
+    }
+
+    // Public brand assets (app icons, store screenshots, marketing)
+    match /public/{path=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Profile pictures
+    match /profile-pictures/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isSelf(userId) && isImage() && under(5);
+    }
+
+    // Everything else: deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

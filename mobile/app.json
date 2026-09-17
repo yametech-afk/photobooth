@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Photobooth App",
+    "slug": "photobooth-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "photoboothapp",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0A1F"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourbrand.photobooth",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Kailangan ang camera para kumuha ng litrato sa photobooth.",
+        "NSPhotoLibraryUsageDescription": "Kailangan ang photo library para mag-save at pumili ng litrato.",
+        "NSPhotoLibraryAddUsageDescription": "Kailangan ang permission para i-save ang mga photo strip sa gallery mo."
+      }
+    },
+    "android": {
+      "package": "com.yourbrand.photobooth",
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "expo-camera",
+      "expo-image-picker",
+      "expo-media-library",
+      "expo-face-detector"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  }
+}

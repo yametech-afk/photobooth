@@ -1,0 +1,129 @@
+name: Mobile — EAS Build / OTA Update
+
+# Manual runner for builds and OTA updates. Root-level workflow:
+# `mobile/` is a workspace directory, and EAS commands run with that as cwd.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'What to run'
+        required: true
+        default: build
+        type: choice
+        options: [build, update]
+      profile:
+        description: 'EAS build profile'
+        required: true
+        default: staging
+        type: choice
+        options: [development, staging, production]
+      platform:
+        description: 'Platform'
+        required: true
+        default: all
+        type: choice
+        options: [all, android, ios]
+      submit:
+        description: 'Submit after build'
+        required: true
+        default: false
+        type: boolean
+      message:
+        description: 'OTA update message (update target only)'
+        required: false
+        default: 'manual OTA push'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ inputs.target == 'build' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.profile == 'production' && 'production' || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Typecheck before spending a build credit
+        working-directory: mobile
+        run: |
+          if node -e "process.exit(require('./package.json').scripts.typecheck ? 0 : 1)"; then
+            npm run typecheck
+          else
+            npx tsc --noEmit
+          fi
+
+      - name: Unit tests before spending a build credit
+        working-directory: mobile
+        run: |
+          if node -e "process.exit(require('./package.json').scripts.test ? 0 : 1)"; then
+            npm test -- --ci --passWithNoTests
+          else
+            echo "::warning::no test script in mobile/package.json — skipping"
+          fi
+
+      - name: EAS build
+        working-directory: mobile
+        run: |
+          eas build \
+            --platform ${{ inputs.platform }} \
+            --profile ${{ inputs.profile }} \
+            --non-interactive
+
+      - name: EAS submit
+        if: ${{ inputs.submit }}
+        working-directory: mobile
+        run: |
+          eas submit \
+            --platform ${{ inputs.platform }} \
+            --profile ${{ inputs.profile }} \
+            --non-interactive \
+            --latest
+
+  update:
+    if: ${{ inputs.target == 'update' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.profile == 'production' && 'production' || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      # JS-only changes. NEVER use this for native dependency or permission
+      # changes — those require a new binary (see devops/docs/ROLLBACK.md).
+      - name: Publish OTA update to the profile channel
+        working-directory: mobile
+        run: |
+          eas update \
+            --branch ${{ inputs.profile }} \
+            --platform ${{ inputs.platform }} \
+            --message "${{ inputs.message }}" \
+            --non-interactive

@@ -1,0 +1,70 @@
+name: Admin Panel — Preview Channel
+
+# Every PR that touches the admin panel gets a throwaway Firebase Hosting
+# preview URL on the STAGING project. It expires automatically and never
+# touches the production site.
+#
+# Root-level workflow: paths are repository-relative.
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'admin-panel/**'
+      - 'firebase.json'
+      - '.firebaserc'
+      - '.github/workflows/admin-preview.yml'
+
+permissions:
+  checks: write
+  contents: read
+  pull-requests: write
+
+env:
+  PROJECT_ID: photobooth-app-staging
+  HOSTING_TARGET: admin
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: admin-panel/package-lock.json
+
+      - name: Build admin panel (staging config)
+        working-directory: admin-panel
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          npm run build
+        env:
+          # Vite reads VITE_* — the same prefix the panel's source and .env.example use.
+          VITE_APP_ENV: staging
+          VITE_FIREBASE_PROJECT_ID: photobooth-app-staging
+          VITE_FIREBASE_AUTH_DOMAIN: photobooth-app-staging.firebaseapp.com
+          VITE_FIREBASE_STORAGE_BUCKET: photobooth-app-staging.firebasestorage.app
+          VITE_FIREBASE_API_KEY: ${{ secrets.STAGING_FIREBASE_API_KEY || 'staging-placeholder-key' }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.STAGING_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.STAGING_APP_ID }}
+          VITE_EXPECTED_PROJECT_ID: photobooth-app-staging
+
+      - name: Preview build must target the staging project
+        run: |
+          set -euo pipefail
+          grep -rq "photobooth-app-staging" admin-panel/build/assets/ \
+            || { echo "::error::Preview bundle is not pointing at photobooth-app-staging"; exit 1; }
+          echo "staging project id confirmed in bundle"
+
+      - name: Deploy to Firebase Hosting preview channel
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_STAGING }}
+          projectId: ${{ env.PROJECT_ID }}
+          target: ${{ env.HOSTING_TARGET }}
+          channelId: pr-${{ github.event.pull_request.number }}
+          expires: 7d

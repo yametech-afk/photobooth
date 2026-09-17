@@ -1,0 +1,24 @@
+{
+  "name": "photobooth-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Photobooth App monorepo — React Native (Expo) mobile app, React admin panel, Firebase Cloud Functions backend, and DevOps/CI-CD pack, assembled from multiple workstream agent outputs.",
+  "workspaces": [
+    "mobile",
+    "admin-panel",
+    "functions"
+  ],
+  "scripts": {
+    "mobile:start": "npm --prefix mobile run start",
+    "mobile:typecheck": "npm --prefix mobile run typecheck",
+    "admin:dev": "npm --prefix admin-panel run dev",
+    "admin:build": "npm --prefix admin-panel run build",
+    "functions:build": "npm --prefix functions run build",
+    "functions:deploy": "npm --prefix functions run deploy",
+    "deploy:all": "firebase deploy",
+    "emulators": "firebase emulators:start",
+    "seed": "node scripts/seed.mjs",
+    "smoke-test": "bash scripts/smoke-test.sh",
+    "validate:devops": "python3 devops/scripts/validate.py"
+  }
+}

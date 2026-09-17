@@ -1,0 +1,123 @@
+rules_version = '2';
+
+// ============================================================
+// Photobooth platform — Firestore security rules
+// Deployed identically to dev / staging / production projects.
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function uid() {
+      return request.auth.uid;
+    }
+    function isSelf(userId) {
+      return isSignedIn() && uid() == userId;
+    }
+    // Admin identity comes from a custom claim set by the backend ONLY.
+    // Never trust a Firestore field for admin authorization.
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.get('admin', false) == true;
+    }
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(uid())).data;
+    }
+    function isPremium() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(uid()))
+        && userDoc().plan == 'premium';
+    }
+    function isStorageUrl(url) {
+      return url is string && url.matches('https://(firebasestorage\\.googleapis\\.com|storage\\.googleapis\\.com)/.*');
+    }
+    function unchanged(field) {
+      return !(field in request.resource.data.diff(resource.data).affectedKeys());
+    }
+
+    // ---------- users ----------
+    match /users/{userId} {
+      allow read: if isSelf(userId) || isAdmin();
+      // Server (Cloud Functions) creates the profile; clients may only self-create minimal fields.
+      allow create: if isSelf(userId)
+        && request.resource.data.keys().hasOnly(['email', 'displayName', 'photoURL', 'createdAt', 'preferences'])
+        && request.resource.data.createdAt == request.time;
+      // A user may edit presentation fields only. plan/credits/role are server-owned.
+      allow update: if isSelf(userId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['displayName', 'photoURL', 'preferences']);
+      allow delete: if false; // lifecycle handled by backend / admin only (audited)
+
+      match /devices/{deviceId} {
+        allow read, write: if isSelf(userId);
+      }
+    }
+
+    // ---------- photos ----------
+    match /photos/{photoId} {
+      allow read: if resource.data.isPublic == true
+        || (isSignedIn() && resource.data.uid == uid())
+        || isAdmin();
+      allow create: if isSignedIn()
+        && request.resource.data.uid == uid()
+        && isStorageUrl(request.resource.data.url)
+        && request.resource.data.keys().hasAny(['filterId', 'url'])
+        && (!('isPublic' in request.resource.data) || request.resource.data.isPublic == false);
+      allow update: if (isSignedIn() && resource.data.uid == uid()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isPublic', 'caption']))
+        || isAdmin();
+      allow delete: if (isSignedIn() && resource.data.uid == uid()) || isAdmin();
+    }
+
+    // ---------- filters (catalog) ----------
+    match /filters/{filterId} {
+      allow read: if true;          // catalog is public (mobile needs it pre-auth for preview)
+      allow write: if isAdmin();    // admin panel writes through the API, admins only
+    }
+
+    // ---------- events + bookings ----------
+    match /events/{eventId} {
+      allow read: if resource.data.status == 'published'
+        || (isSignedIn() && resource.data.organizerId == uid())
+        || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.organizerId == uid();
+      allow update, delete: if isAdmin()
+        || (isSignedIn() && resource.data.organizerId == uid());
+
+      match /bookings/{bookingId} {
+        allow read: if isAdmin()
+          || (isSignedIn() && resource.data.userId == uid());
+        allow create: if isSignedIn() && request.resource.data.userId == uid();
+        allow update: if isAdmin() || (isSignedIn()
+          && resource.data.userId == uid()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'notes']));
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ---------- subscriptions (server-owned, read-only for owner) ----------
+    match /subscriptions/{subId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == uid());
+      allow write: if false; // Cloud Functions only
+    }
+
+    // ---------- admins registry ----------
+    match /admins/{adminUid} {
+      allow read: if isAdmin();
+      allow write: if false; // provisioned via CLI / console only
+    }
+
+    // ---------- server-only collections ----------
+    match /analytics/{doc=**}      { allow read, write: if false; }
+    match /auditLogs/{doc=**}      { allow read: if isAdmin(); allow write: if false; }
+    match /rateLimits/{doc=**}     { allow read, write: if false; }
+    match /systemConfig/{doc=**}   { allow read: if isAdmin(); allow write: if false; }
+
+    // ---------- default deny ----------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

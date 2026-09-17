@@ -1,0 +1,149 @@
+MERGE VERIFY REPORT — photobooth v4 final (consolidated)
+Generated: 2026-09-17 (assembly sandbox)
+Ito ang aktwal na output ng mga check na tumakbo sa merged tree.
+
+$ find . -type d -name node_modules | wc -l
+0
+
+$ find . -path '*src/modules/src/modules*' | wc -l
+0
+
+$ grep -rn 'ModulePlaceholderScreen' mobile/src/navigation || echo NONE
+mobile/src/navigation/RootNavigator.tsx:136: * no ModulePlaceholderScreen registration remains:
+
+$ grep -rn "'uploadPhoto'\|'activatePremium'\|'validateReceipt'" mobile/src || echo NONE
+mobile/src/modules/preview-editor/services/cloudFunctions.ts:229:  }>(functions, 'uploadPhoto');
+mobile/src/modules/preview-editor/scripts/check-module.mjs:148:  'uploadPhoto', // legacy
+
+$ grep -rn 'getFunctions(' mobile/src
+mobile/src/modules/monetization/src/monetization/screens/EventBookingScreen.jsx:21:// Calling getFunctions() here without a region would hit us-central1 and every
+mobile/src/modules/monetization/src/monetization/services/subscriptionService.js:12: *     (`asia-southeast1`), not `getFunctions()` (which defaults to us-central1)
+mobile/src/modules/monetization/src/services/firebase.js:10: * mobile core. Never call `getFunctions()` without a region inside this module:
+mobile/src/modules/preview-editor/INTEGRATION.md:135:  pins it via `getFunctions(firebaseApp, FUNCTIONS_REGION)`. Using the default region
+mobile/src/modules/preview-editor/services/cloudFunctions.ts:29:const functions = getFunctions(firebaseApp, FUNCTIONS_REGION);
+mobile/src/modules/camera/README.md:82:const handoff = createUploadHandoff(getFunctions(app));
+mobile/src/modules/camera/README.md:89:Tugma ito sa backend Cloud Functions na `requestPhotoUpload` / `finalizePhotoUpload` / `reportUploadFailed` (quota pre-check + signed URL + credit debit sa server). Para sa emulator testing: `connectFunctionsEmulator` bago pumasa sa `getFunctions(app)`.
+mobile/src/services/firebase.ts:16: * every callable to asia-southeast1; Firebase's `getFunctions(app)` defaults to
+mobile/src/services/firebase.ts:49:// Pinned region — every module must use THIS instance (never call getFunctions()
+mobile/src/services/firebase.ts:51:functionsInstance = getFunctions(app, FUNCTIONS_REGION);
+
+$ grep -rn 'setDoc\|addDoc\|deleteDoc' mobile/src | wc -l
+3
+
+$ ls mobile | tr '\n' ' '; echo; for f in eas.json app.config.js; do echo -n "mobile/$f: "; test -f mobile/$f && echo YES || echo NO; done
+App.tsx INTEGRATION.md INTEGRATION_CHECKLIST.md README.md app.json babel.config.js jest.config.js package.json src tsconfig.json 
+mobile/eas.json: NO
+mobile/app.config.js: NO
+
+$ ls devops/mobile
+app.config.js
+eas.json
+
+$ grep -rn 'REACT_APP_' admin-panel/src admin-panel/.env.example || echo NONE
+NONE
+
+$ grep -n 'admins/\|adminRoles\|demo-admin\|signIn(' admin-panel/src/pages/Login.jsx | head
+21:        // Real flow: Firebase Auth, then verify admin role (claim or admins/{uid} doc)
+23:        signIn(admin);
+26:        signIn({ uid: 'demo-admin', email, role: 'superadmin', name: 'Demo Admin' });
+
+$ grep -rn 'makePublic' functions/src
+functions/src/services/photoService.ts:263:      await bucket().file(publicPath).makePublic();
+functions/src/services/photoService.ts:430:    await publicFile.makePublic();
+
+$ grep -rn 'TODO(integration)' mobile/src/modules/monetization | wc -l
+5
+
+$ grep -n 'allow read' firestore.rules | head -8
+80:      allow read: if true;
+86:      allow read: if true;
+91:      allow read: if true;
+97:      allow read: if signedIn() &&
+105:      allow read: if isSelf(userId) || isAnyAdminRole();
+120:        allow read: if isSelf(userId) || isAnyAdminRole();
+127:      allow read: if isSelf(userId) || isAnyAdminRole();
+132:      allow read: if signedIn() && resource.data.uid == currentUid() || isAnyAdminRole();
+
+$ find . -maxdepth 1 -type d | sort | tr '\n' ' '
+. ./.github ./admin-panel ./devops ./docs ./functions ./mobile ./qa ./scripts ./shared
+
+$ find . -type f | wc -l
+236
+
+$ json-validate firebase.json
+OK
+
+$ json-validate firestore.indexes.json
+OK
+
+$ json-validate .firebaserc
+OK
+
+$ json-validate package.json
+OK
+
+$ json-validate mobile/package.json
+OK
+
+$ json-validate functions/package.json
+OK
+
+$ json-validate admin-panel/package.json
+OK
+
+$ python3 devops/scripts/validate.py  (exit=1)
+  ok: admin env prefix = VITE_
+  ok: admin-panel/.env.example: VITE_* prefix
+  ok: admin-preview.yml:build@admin-panel
+  ok: deploy-staging.yml:/healthz
+  ok: deploy-staging.yml:build@admin-panel
+  ok: devops/admin-panel/.env.example: VITE_* prefix
+  ok: functions codebase = photobooth-core
+  ok: hosting.public == Vite outDir (admin-panel/build)
+  ok: mobile-eas-build.yml:test@mobile
+  ok: mobile-eas-build.yml:typecheck@mobile
+  ok: pr-checks.yml:build@admin-panel
+  ok: pr-checks.yml:build@functions
+  ok: pr-checks.yml:lint@mobile
+  ok: pr-checks.yml:rules-harness
+  ok: pr-checks.yml:test:rules@functions
+  ok: pr-checks.yml:test@functions
+  ok: pr-checks.yml:test@mobile
+  ok: pr-checks.yml:typecheck@mobile
+  ok: predeploy:build
+  ok: release-production.yml:/healthz
+  ok: release-production.yml:build@admin-panel
+
+== FAILURES ==
+  !! JSON parse failed: qa/functions/test/.0-functions-package-additions.json: Expecting value: line 1 column 1 (char 0)
+  !! pr-checks.yml:190: sets REACT_APP_* env vars but the admin panel reads import.meta.env.VITE_*
+
+=============================================================
+ADDENDUM — validate.py, pangalawang run (17 Set 2026)
+=============================================================
+$ mv qa/functions/test/.0-functions-package-additions.json qa/functions/test/.0-functions-package-additions.md
+  (dahilan: ang file ay isang JSON-comment snippet, hindi parseable na JSON — pinalitan ang extension
+   para hindi na maging parse error; ang nilalaman ay hindi binago)
+$ mv qa/firestore.rules qa/_reference-firestore.rules
+  (dahilan: reference copy ng QA pack; ang authoritative rules ay ang ROOT firestore.rules)
+
+BUNGA: 16 JSON = ok · 5 YAML = ok · 22 cross-file reference = ok · 1 FAILURE:
+  !! pr-checks.yml:190: sets REACT_APP_* env vars but the admin panel reads import.meta.env.VITE_*
+
+ASSESSMENT (hindi tinatanggap bilang pass, hindi rin itinuturing na tunay na defect):
+  Ang linya 190 ng .github/workflows/pr-checks.yml ay ang anti-pattern GUARD mismo:
+      if grep -rIl 'REACT_APP_' src/ .env.example 2>/dev/null; then ... echo "::error::..."
+  Nag-flag ito dahil ang literal na string na REACT_APP_ ay nasa loob ng guard.
+  Walang workflow na nagse-set ng REACT_APP_* na env: ang lahat ng admin env ay VITE_* (verified
+  sa 4 na workflow + admin-panel/.env.example). Refinement lang ng validate.py ang kailangan
+  (i-skip ang guard lines) — hindi app-code change.
+
+Verification na tumakbo sa merged tree pagkatapos ng addendum na ito:
+
+Karagdagang natuklasan sa grep output (isiniwalat, hindi itinago):
+  - mobile/src/modules/preview-editor/services/cloudFunctions.ts:229 -> 'uploadPhoto' (legacy string pa)
+    => B-11 sa MERGE_NOTES §4. Ang core (mobile/src/services/functions.ts) ay malinis (0 legacy string).
+  - mobile/eas.json: WALA ; mobile/app.config.js: WALA ; nasa devops/mobile/ => B-12 sa MERGE_NOTES §4.
+  - 'setDoc|addDoc|deleteDoc' sa mobile/src = 3 hits (lahat nasa preview-editor/monetization module internals o komento).
+  - makePublic: 2 call sites pa (photoService.ts:263, :430) => B-4.
+  - TODO(integration) sa monetization = 5 => B-3 (IAP).

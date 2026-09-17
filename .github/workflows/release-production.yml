@@ -1,0 +1,270 @@
+name: Release Production
+
+# Triggered by a version tag. The `production` GitHub Environment is protected
+# with required reviewers, so nothing reaches production until a human approves.
+#
+# Two CI paths that used to be wrong and are now correct:
+#   1. The admin bundle is a Vite build, so its output lives in build/assets —
+#      never the Create-React-App path build/static/js.
+#   2. The functions codebase name is the one declared in the root firebase.json
+#      (`photobooth-core`), so the deploy targets functions:photobooth-core.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v1.2.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  PROJECT_ID: photobooth-app-prod
+  HOSTING_TARGET: admin
+  HOSTING_SITE: photobooth-admin-prod
+  FUNCTIONS_CODEBASE: photobooth-core
+  NODE_VERSION: '20'
+
+jobs:
+  guard:
+    name: Pre-release guard
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - id: ver
+        name: Resolve version from tag
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Block release if the tag is not on main
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Tag ${{ inputs.tag || github.ref_name }} is not an ancestor of main. Aborting."
+            exit 1
+          fi
+          echo "tag is an ancestor of main"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: No REPLACE_* placeholders may ship to production
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 devops/scripts/validate.py
+          if grep -rn "REPLACE_WITH_\|REPLACE_ME" --include='*.json' --include='*.js' --include='*.yml' \
+               mobile admin-panel functions .github 2>/dev/null; then
+            echo "::error::Unresolved REPLACE_* placeholder found — stop before deploying production."
+            exit 1
+          fi
+          echo "placeholder scan clean"
+
+  backend:
+    name: Deploy prod backend
+    needs: guard
+    runs-on: ubuntu-latest
+    environment:
+      name: production       # <-- manual approval gate lives here
+      url: https://admin.photobooth.example
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Authenticate with the production service account
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_PROD }}' > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - run: npm i -g firebase-tools
+
+      - name: Install function dependencies
+        working-directory: functions
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Deploy rules + indexes (no function changes yet)
+        run: |
+          firebase deploy --only firestore:rules,firestore:indexes,storage \
+            --project "$PROJECT_ID" --non-interactive
+
+      - name: Deploy functions (single codebase, gradual)
+        run: |
+          firebase deploy --only functions:"$FUNCTIONS_CODEBASE" \
+            --project "$PROJECT_ID" --non-interactive
+
+      - name: Verify health endpoint
+        run: |
+          set -euo pipefail
+          url="https://asia-southeast1-${PROJECT_ID}.cloudfunctions.net/healthz"
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)
+            echo "attempt $i -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "::error::Health check failed after deploy ($url)"
+          exit 1
+
+  admin-panel:
+    name: Deploy prod admin panel
+    needs: backend
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://admin.photobooth.example
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: admin-panel/package-lock.json
+
+      - name: Build
+        working-directory: admin-panel
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          npm run build
+        env:
+          VITE_APP_ENV: production
+          VITE_FIREBASE_API_KEY: ${{ secrets.PROD_FIREBASE_API_KEY || 'prod-placeholder-key' }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.PROD_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: photobooth-app-prod
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ vars.PROD_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.PROD_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.PROD_APP_ID }}
+          VITE_EXPECTED_PROJECT_ID: photobooth-app-prod
+
+      # Point of no return. Scans the real Vite output directory (build/assets).
+      - name: Point-of-no-return check — prod bundle must target prod
+        run: |
+          set -euo pipefail
+          [ -d admin-panel/build/assets ] || { echo "::error::admin-panel/build/assets missing — Vite output layout changed"; exit 1; }
+          grep -rq "photobooth-app-prod" admin-panel/build/assets/ \
+            || { echo "::error::Prod bundle is not pointing at the prod project"; exit 1; }
+          if grep -rq "photobooth-app-staging" admin-panel/build/assets/; then
+            echo "::error::Prod bundle references the STAGING project id. Refusing to deploy."
+            exit 1
+          fi
+          echo "prod project id confirmed; no staging references in the bundle"
+
+      - name: Authenticate
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_PROD }}' > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - run: npm i -g firebase-tools
+
+      - name: Record the current release for rollback
+        run: |
+          firebase hosting:releases:list --project "$PROJECT_ID" --site "$HOSTING_SITE" \
+            | head -n 20 | tee "$GITHUB_WORKSPACE/previous-release.txt" || \
+            echo "no previous release list available (first deploy?)" | tee "$GITHUB_WORKSPACE/previous-release.txt"
+
+      - name: Deploy hosting
+        run: |
+          firebase deploy --only hosting:"$HOSTING_TARGET" \
+            --project "$PROJECT_ID" --non-interactive
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hosting-previous-release
+          path: previous-release.txt
+          retention-days: 30
+
+  mobile:
+    name: EAS prod build + store submit
+    needs: [guard, backend]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://expo.dev/accounts/yourbrand/projects/photobooth-app/builds
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # app.config.js reads `version` from the static Expo config, and eas.json
+      # sets appVersionSource: remote. So we only ASSERT that the app version
+      # matches the tag — we do not mutate package.json from CI.
+      - name: Verify the app version matches the release tag
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          APP_VERSION=$(node -e "const c=require('./app.json');process.stdout.write((c.expo && c.expo.version) || '')" 2>/dev/null || true)
+          echo "mobile app.json expo.version = ${APP_VERSION:-<unset>}"
+          echo "release tag version          = ${{ needs.guard.outputs.version }}"
+          if [ -z "$APP_VERSION" ]; then
+            echo "::error::mobile/app.json is missing expo.version"
+            exit 1
+          fi
+          if [ "$APP_VERSION" != "${{ needs.guard.outputs.version }}" ]; then
+            echo "::error::mobile/app.json expo.version ($APP_VERSION) does not match the release tag (${{ needs.guard.outputs.version }}). Bump it before tagging."
+            exit 1
+          fi
+          echo "app version matches the tag"
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build production binaries
+        working-directory: mobile
+        run: eas build --platform all --profile production --non-interactive
+
+      - name: Submit to stores (Android staged at 10%, iOS draft)
+        working-directory: mobile
+        run: eas submit --platform all --profile production --non-interactive --latest
+
+  notify:
+    name: Release summary
+    needs: [backend, admin-panel, mobile]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          {
+            echo "### Release ${{ inputs.tag || github.ref_name }}"
+            echo ""
+            echo "| Job | Result |"
+            echo "| --- | --- |"
+            echo "| backend | ${{ needs.backend.result }} |"
+            echo "| admin-panel | ${{ needs.admin-panel.result }} |"
+            echo "| mobile | ${{ needs.mobile.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,170 @@
+name: Deploy Staging
+
+# Gate 1 path: every merge into `develop` deploys rules + indexes + storage +
+# functions + the admin panel to the staging project, then builds an internal
+# tester binary. Nothing here can reach production.
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: photobooth-app-staging
+  HOSTING_TARGET: admin
+  FUNCTIONS_CODEBASE: photobooth-core
+  NODE_VERSION: '20'
+
+jobs:
+  backend:
+    name: Deploy backend (rules, indexes, functions)
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: DevOps preflight before touching a live project
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 devops/scripts/validate.py
+
+      - name: Authenticate with the staging service account
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_STAGING }}' > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools
+
+      - name: Install function dependencies
+        working-directory: functions
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Deploy Firestore rules + indexes and Storage rules
+        run: |
+          firebase deploy \
+            --only firestore:rules,firestore:indexes,storage \
+            --project "$PROJECT_ID" \
+            --non-interactive
+
+      - name: Deploy Cloud Functions
+        run: |
+          firebase deploy \
+            --only functions \
+            --project "$PROJECT_ID" \
+            --non-interactive
+
+      # The backend exports the HTTP function `healthz` (functions/src/http/endpoints.ts).
+      # The endpoint is /healthz, not /health — calling the wrong path always 404s.
+      - name: Smoke test the health endpoint
+        run: |
+          set -euo pipefail
+          url="https://asia-southeast1-${PROJECT_ID}.cloudfunctions.net/healthz"
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)
+            echo "attempt $i -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "::error::/healthz did not return 200 after 5 attempts ($url)"
+          exit 1
+
+      - name: Upload deploy log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-deploy-${{ github.sha }}
+          path: |
+            firebase-debug.log
+            firestore-debug.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  admin-panel:
+    name: Deploy admin panel (staging)
+    needs: backend
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: admin-panel/package-lock.json
+
+      - name: Build
+        working-directory: admin-panel
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          npm run build
+        env:
+          VITE_APP_ENV: staging
+          VITE_FIREBASE_API_KEY: ${{ secrets.STAGING_FIREBASE_API_KEY || 'staging-placeholder-key' }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.STAGING_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: photobooth-app-staging
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ vars.STAGING_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.STAGING_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.STAGING_APP_ID }}
+          VITE_EXPECTED_PROJECT_ID: photobooth-app-staging
+
+      - name: Staging bundle must target the staging project
+        run: |
+          set -euo pipefail
+          grep -rq "photobooth-app-staging" admin-panel/build/assets/ \
+            || { echo "::error::Staging bundle is not pointing at photobooth-app-staging"; exit 1; }
+          echo "staging project id confirmed in bundle"
+
+      - name: Authenticate
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_STAGING }}' > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - run: npm i -g firebase-tools
+
+      - name: Deploy to the live channel of the staging site
+        run: |
+          firebase deploy \
+            --only hosting:"$HOSTING_TARGET" \
+            --project "$PROJECT_ID" \
+            --non-interactive
+
+  staging-eas-build:
+    name: EAS staging build (internal testers)
+    needs: backend
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build + distribute to internal testers
+        working-directory: mobile
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          eas build --platform all --profile staging --non-interactive --no-wait

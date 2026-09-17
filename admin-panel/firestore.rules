@@ -1,0 +1,107 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- helpers -------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Works with custom claims (role set via setCustomUserClaims) OR with
+    // an /admins/{uid} document. Prefer custom claims in production —
+    // claim checks don't cost a document read per rule evaluation.
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.role == 'admin' ||
+        request.auth.token.role == 'superadmin' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // ---- admins --------------------------------------------------------
+    match /admins/{uid} {
+      allow read: if isSignedIn();               // login needs to read its own doc
+      allow write: if isAdmin();                 // admins managed by superadmins only
+    }
+
+    // ---- users ---------------------------------------------------------
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId);
+      // Users may edit their profile but NEVER their own plan/credits —
+      // only the backend (Cloud Functions) or an admin can change those.
+      allow update: if (isOwner(userId)
+                        && !request.resource.data.diff(resource.data).affectedKeys()
+                          .hasAny(['plan', 'creditsRemaining', 'totalPhotosTaken']))
+                       || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ---- photos --------------------------------------------------------
+    match /photos/{photoId} {
+      allow read: if resource.data.isPublic == true || isOwner(resource.data.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      // Users can only toggle their own photo's visibility;
+      // likes/shares counters and moderation status are admin/backend-only.
+      allow update: if (isOwner(resource.data.uid)
+                        && request.resource.data.diff(resource.data).affectedKeys()
+                          .hasOnly(['isPublic']))
+                       || isAdmin();
+      allow delete: if isOwner(resource.data.uid) || isAdmin();
+    }
+
+    // ---- filters (managed in admin panel) -------------------------------
+    match /filters/{filterId} {
+      allow read: if true;                       // app needs the catalog
+      allow write: if isAdmin();
+    }
+
+    // ---- subscriptions (server-written only) ----------------------------
+    match /subscriptions/{subId} {
+      allow read: if isOwner(resource.data.uid) || isAdmin();
+      allow write: if false;                     // Cloud Functions only
+    }
+
+    // ---- events & bookings ----------------------------------------------
+    match /events/{eventId} {
+      allow read: if resource.data.status == 'published' || isAdmin();
+      allow write: if isAdmin();
+      match /bookings/{bookingId} {
+        allow read: if isAdmin();
+        allow create: if isSignedIn();           // users can book
+        allow update, delete: if isAdmin();      // status changes admin-only
+      }
+    }
+    match /bookings/{bookingId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- notifications ---------------------------------------------------
+    match /notifications/{notifId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();                 // sending happens via Cloud Functions
+    }
+
+    // ---- analytics (server-only) -----------------------------------------
+    match /analytics/{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---- platform config (settings page target in production) ------------
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---- default deny -----------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

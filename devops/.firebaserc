@@ -1,0 +1,26 @@
+{
+  "projects": {
+    "default": "photobooth-app-dev",
+    "dev": "photobooth-app-dev",
+    "staging": "photobooth-app-staging",
+    "production": "photobooth-app-prod"
+  },
+  "targets": {
+    "photobooth-app-dev": {
+      "hosting": {
+        "admin": ["photobooth-admin-dev"]
+      }
+    },
+    "photobooth-app-staging": {
+      "hosting": {
+        "admin": ["photobooth-admin-staging"]
+      }
+    },
+    "photobooth-app-prod": {
+      "hosting": {
+        "admin": ["photobooth-admin-prod"]
+      }
+    }
+  },
+  "etags": {}
+}

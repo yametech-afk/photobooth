@@ -1,0 +1,38 @@
+{
+  "name": "photobooth-functions",
+  "description": "Cloud Functions backend for the Photobooth platform (mobile app + admin panel)",
+  "private": true,
+  "engines": {
+    "node": "20"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf lib",
+    "serve": "npm run build && firebase emulators:start --only functions,firestore,auth,storage",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log",
+    "seed": "node ../scripts/seed.mjs",
+    "test": "jest -c test/jest.config.rules.js --testPathIgnorePatterns /rules/ --passWithNoTests",
+    "test:unit": "jest -c test/jest.config.rules.js --testPathIgnorePatterns /rules/ --passWithNoTests",
+    "test:rules": "firebase emulators:exec --only firestore,storage,auth --project photobooth-app-dev -- \"jest -c test/jest.config.rules.js --runInBand --testPathPattern /rules/\"",
+    "test:rules:ci": "firebase emulators:exec --only firestore,storage,auth --project photobooth-app-dev -- \"jest -c test/jest.config.rules.js --runInBand --ci --testPathPattern /rules/\""
+  },
+  "dependencies": {
+    "firebase-admin": "^12.6.0",
+    "firebase-functions": "^6.1.1"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.10",
+    "firebase": "^10.12.2",
+    "firebase-tools": "^13.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.3",
+    "typescript": "^5.6.2"
+  }
+}

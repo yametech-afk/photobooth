@@ -1,0 +1,223 @@
+rules_version = '2';
+
+/**
+ * Photobooth platform — Firestore security rules
+ * ------------------------------------------------------------------
+ * Design principles:
+ *  1. DENY BY DEFAULT. The catch-all at the bottom denies everything.
+ *  2. Privileged data (quotas, subscriptions, admin roles, analytics, money) is
+ *     read-only or invisible to clients and is written exclusively by Cloud Functions
+ *     (Admin SDK bypasses these rules).
+ *  3. A client can NEVER self-grant admin, premium or credits: `plan`, `creditsRemaining`,
+ *     `role`, `admin`, `premiumUntil` are not in any client-writable field list.
+ *  4. Admin authority requires BOTH the custom claim (`token.admin == true`) AND a live
+ *     document in `adminRoles/{uid}`. A stale or forged claim alone grants nothing.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------- helpers
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUid() {
+      return request.auth.uid;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && currentUid() == userId;
+    }
+
+    function claimAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function claimRole() {
+      return signedIn() ? request.auth.token.role : null;
+    }
+
+    function roleDocExists() {
+      return signedIn() && exists(/databases/$(database)/documents/adminRoles/$(currentUid()));
+    }
+
+    function roleDoc() {
+      return roleDocExists()
+        ? get(/databases/$(database)/documents/adminRoles/$(currentUid())).data
+        : null;
+    }
+
+    // Claim + live role document must agree.
+    function isAdmin() {
+      return claimAdmin() && roleDocExists() &&
+             roleDoc().status == 'active';
+    }
+
+    function isSuperAdmin() {
+      return isAdmin() && roleDoc().role == 'superadmin';
+    }
+
+    function isAnyAdminRole() {
+      return isAdmin() &&
+             (roleDoc().role == 'superadmin' || roleDoc().role == 'admin');
+    }
+
+    function onlyChanged(changed, allowed) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowed);
+    }
+
+    function unchanged(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    function isPremiumClaim() {
+      return signedIn() && request.auth.token.plan == 'premium';
+    }
+
+    // ---------------------------------------------------------------- config (public, read-only)
+    // Non-secret feature flags, credit costs, subscription product mapping.
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Public catalogues
+    match /filters/{filterId} {
+      allow read: if true;
+      allow write: if false; // admin panel writes through adminUpsertFilter()
+    }
+
+    match /packages/{packageId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /notifications/{notificationId} {
+      // Broadcast messages created by admins. `targetUid == null` means everyone.
+      allow read: if signedIn() &&
+                     (resource.data.targetUid == null || resource.data.targetUid == currentUid() ||
+                      resource.data.targetUid == 'all' || isAnyAdminRole());
+      allow write: if false;
+    }
+
+    // ---------------------------------------------------------------- users
+    match /users/{userId} {
+      allow read: if isSelf(userId) || isAnyAdminRole();
+
+      // The document is created by the identity trigger, never by the client.
+      allow create: if false;
+
+      // Clients may only touch cosmetic / preference fields.
+      allow update: if isSelf(userId) &&
+                       onlyChanged(['displayName', 'photoURL', 'preferences', 'locale',
+                                    'onboarding', 'deviceTokens', 'lastActiveAt']);
+
+      // No client-side deletion — account deletion runs through a Cloud Function.
+      allow delete: if false;
+
+      // Per-user private sub-collections: readable by the owner, never client-writable.
+      match /{sub=**} {
+        allow read: if isSelf(userId) || isAnyAdminRole();
+        allow write: if false;
+      }
+    }
+
+    // ---------------------------------------------------------------- quotas (server-owned)
+    match /quotas/{userId} {
+      allow read: if isSelf(userId) || isAnyAdminRole();
+      allow write: if false;
+    }
+
+    match /quotaLedger/{entryId} {
+      allow read: if signedIn() && resource.data.uid == currentUid() || isAnyAdminRole();
+      allow write: if false;
+    }
+
+    // ---------------------------------------------------------------- photos
+    match /photos/{photoId} {
+      // Public gallery, owner, or admin. `event` visibility additionally requires a signed-in user.
+      allow read: if signedIn() &&
+                     (resource.data.uid == currentUid() ||
+                      resource.data.visibility == 'public' ||
+                      (resource.data.visibility == 'event' && isAnyAdminRole()) ||
+                      isAnyAdminRole());
+      allow read: if resource.data.visibility == 'public';
+      allow write: if false; // requestPhotoUpload / finalizePhotoUpload / deletePhoto only
+    }
+
+    match /photoShares/{shareId} {
+      allow read: if signedIn() && (resource.data.uid == currentUid() || isAnyAdminRole());
+      allow write: if false;
+    }
+
+    match /uploadReservations/{reservationId} {
+      allow read: if signedIn() && resource.data.uid == currentUid();
+      allow write: if false;
+    }
+
+    // ---------------------------------------------------------------- events & bookings
+    match /events/{eventId} {
+      allow read: if signedIn() &&
+                     (resource.data.status == 'published' ||
+                      resource.data.organizerId == currentUid() ||
+                      isAnyAdminRole());
+      allow write: if false; // adminCreateEvent / adminUpdateEvent / adminPublishEvent
+    }
+
+    match /eventSlots/{slotId} {
+      allow read: if signedIn() && resource.data.status != 'draft';
+      allow write: if false; // adminCreateEventSlot / adminUpdateEventSlot
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if signedIn() &&
+                     (resource.data.uid == currentUid() ||
+                      resource.data.organizerId == currentUid() ||
+                      isAnyAdminRole());
+      allow write: if false; // createBooking / cancelBooking / adminUpdateBookingStatus
+    }
+
+    // ---------------------------------------------------------------- subscriptions (server-owned)
+    match /subscriptions/{subscriptionId} {
+      allow read: if signedIn() &&
+                     (resource.data.uid == currentUid() || isAnyAdminRole());
+      allow write: if false;
+    }
+
+    // ---------------------------------------------------------------- analytics
+    match /analytics_events/{eventId} {
+      allow read: if isAnyAdminRole();
+      allow write: if false; // logAnalyticsEvents() validates + writes server-side
+    }
+
+    match /analytics_daily/{dayId} {
+      allow read: if signedIn(); // aggregates only (no PII)
+      allow write: if false;
+    }
+
+    match /metrics/{docId} {
+      allow read: if isAnyAdminRole();
+      allow write: if false;
+    }
+
+    // ---------------------------------------------------------------- admin roles (server-owned)
+    match /adminRoles/{userId} {
+      allow read: if isSelf(userId) || isSuperAdmin();
+      allow write: if false; // adminGrantRole / adminRevokeRole only
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAnyAdminRole();
+      allow write: if false;
+    }
+
+    match /idempotencyKeys/{keyId} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------------- default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

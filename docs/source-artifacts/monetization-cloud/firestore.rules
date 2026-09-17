@@ -1,0 +1,78 @@
+// ============================================================
+// FIRESTORE RULES — monetization security boundary.
+// Deploy:  firebase deploy --only firestore:rules
+//
+// KEY PRINCIPLE: plan, entitlements, and usage counters are
+// SERVER-ONLY fields. A client may read them but can never write
+// them — otherwise everyone would grant themselves Premium.
+// All grants flow through Cloud Functions (service account).
+// ============================================================
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // -----------------------------------------------
+    // USERS — owner can read; owner can write ONLY the
+    // safe profile fields; plan/entitlements are server-only.
+    // -----------------------------------------------
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId);
+
+      allow update: if isOwner(userId) &&
+        // Whitelist: only these fields may change from the client
+        (request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['displayName', 'photoURL', 'preferences', 'creditsRemaining'])) &&
+        // And even then, 'plan'/'entitlements' may never change
+        !('plan' in request.resource.data.diff(resource.data).affectedKeys()) &&
+        !('entitlements' in request.resource.data.diff(resource.data).affectedKeys());
+
+      allow delete: if false;
+
+      // ---- USAGE COUNTERS: server-only writes ----
+      match /usage/{periodKey} {
+        allow read: if isOwner(userId);
+        allow write: if false; // only Cloud Functions may bump counters
+      }
+    }
+
+    // -----------------------------------------------
+    // SUBSCRIPTIONS — readable by owner, writable ONLY
+    // by the server (validateReceipt Cloud Function).
+    // -----------------------------------------------
+    match /subscriptions/{uid} {
+      allow read: if isOwner(uid);
+      allow write: if false; // server-granted only
+    }
+
+    // -----------------------------------------------
+    // EVENTS / ENQUIRIES — admin + owner read;
+    // write stays server-side (createEventBooking).
+    // -----------------------------------------------
+    match /events/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // -----------------------------------------------
+    // FILTERS CATALOG — read-only product data
+    // -----------------------------------------------
+    match /filters/{filterId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Default: deny everything else.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

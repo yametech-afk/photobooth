@@ -1,0 +1,71 @@
+{
+  "cli": {
+    "version": ">= 13.0.0",
+    "appVersionSource": "remote",
+    "requireCommit": true
+  },
+  "build": {
+    "base": {
+      "node": "20.19.0",
+      "credentialsSource": "remote",
+      "env": {
+        "EXPO_NO_TELEMETRY": "1"
+      }
+    },
+    "development": {
+      "extends": "base",
+      "developmentClient": true,
+      "distribution": "internal",
+      "channel": "development",
+      "env": {
+        "APP_ENV": "development",
+        "EXPO_PUBLIC_APP_ENV": "development",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "photobooth-app-dev"
+      },
+      "android": { "buildType": "apk" }
+    },
+    "staging": {
+      "extends": "base",
+      "distribution": "internal",
+      "channel": "staging",
+      "env": {
+        "APP_ENV": "staging",
+        "EXPO_PUBLIC_APP_ENV": "staging",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "photobooth-app-staging"
+      },
+      "android": { "buildType": "apk" }
+    },
+    "production": {
+      "extends": "base",
+      "autoIncrement": true,
+      "channel": "production",
+      "env": {
+        "APP_ENV": "production",
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "photobooth-app-prod"
+      },
+      "android": { "buildType": "app-bundle" },
+      "ios": { "resourceClass": "m-medium" }
+    }
+  },
+  "submit": {
+    "staging": {
+      "android": { "track": "internal", "releaseStatus": "completed" },
+      "ios": {
+        "ascAppId": "REPLACE_WITH_APP_STORE_CONNECT_APP_ID",
+        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID"
+      }
+    },
+    "production": {
+      "android": {
+        "track": "production",
+        "releaseStatus": "draft",
+        "rollout": 0.1
+      },
+      "ios": {
+        "ascAppId": "REPLACE_WITH_APP_STORE_CONNECT_APP_ID",
+        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID"
+      }
+    }
+  }
+}

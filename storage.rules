@@ -1,0 +1,70 @@
+rules_version = '2';
+
+/**
+ * Photobooth platform — Cloud Storage security rules
+ * ------------------------------------------------------------------
+ * Layout (must stay in sync with functions/src/config/constants.ts STORAGE_PATHS):
+ *   users/{uid}/photos/{photoId}.jpg     private captures
+ *   users/{uid}/avatars/{file}           profile picture
+ *   users/{uid}/exports/{file}           generated strips / GIFs / PDFs
+ *   events/{eventId}/cover/{file}        event cover image (admin)
+ *   public/photos/{photoId}.jpg          published gallery copies (functions only)
+ *
+ * Rules are deny-by-default and enforce size + MIME type on every write.
+ */
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    // ------------------------------------------------------------- user photos
+    match /users/{userId}/photos/{fileName} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId)
+                   && request.resource.size < 10 * 1024 * 1024
+                   && request.resource.contentType.matches('image/(jpeg|jpg|png|webp|heic)');
+    }
+
+    // ------------------------------------------------------------- user avatars
+    match /users/{userId}/avatars/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId)
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/(jpeg|jpg|png|webp)');
+    }
+
+    // ------------------------------------------------------------- generated exports
+    match /users/{userId}/exports/{fileName} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId)
+                   && request.resource.size < 25 * 1024 * 1024
+                   && request.resource.contentType.matches('image/(jpeg|jpg|png|webp|gif)|application/pdf');
+    }
+
+    // ------------------------------------------------------------- event covers
+    match /events/{eventId}/cover/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() // refined by Cloud Function authorization on write path
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/(jpeg|jpg|png|webp)');
+    }
+
+    // ------------------------------------------------------------- public gallery mirror
+    // Written only by finalizePhotoUpload() when the user opts into public visibility.
+    match /public/photos/{fileName} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------- default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+functions/node_modules/
+
+# Build output
+functions/lib/
+admin-panel/build/
+mobile/.expo/
+dist/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+functions/.env
+functions/.env.*
+!.env.example
+serviceAccount*.json
+*-firebase-adminsdk-*.json
+.runtimeconfig.json
+
+# Firebase local artifacts
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+database-debug.log
+pubsub-debug.log
+firebase-export-*/
+firestore_export/
+firestore.indexes.json.bak
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Test / coverage
+coverage/
+.nyc_output/

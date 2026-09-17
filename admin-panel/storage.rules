@@ -1,0 +1,31 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn()      { return request.auth != null; }
+    function isOwner(userId)   { return isSignedIn() && request.auth.uid == userId; }
+    function validImage()      { return request.resource.contentType.matches('image/.*'); }
+
+    // User photos — max 10 MB, images only
+    match /photos/{userId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) && validImage()
+                     && request.resource.size < 10 * 1024 * 1024;
+      allow delete: if isOwner(userId);
+    }
+
+    // Profile pictures — public read, owner write, max 5 MB
+    match /profile-pictures/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isOwner(userId) && validImage()
+                     && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    // Event covers — public read, signed-in write, max 5 MB
+    match /event-covers/{eventId}/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn() && validImage()
+                     && request.resource.size < 5 * 1024 * 1024;
+    }
+  }
+}
