@@ -64,9 +64,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            mobile/package.json
+          cache-dependency-path: package-lock.json
 
       - name: Setup Java (JDK ${{ env.JAVA_VERSION }})
         uses: actions/setup-java@v5
@@ -105,25 +103,17 @@ jobs:
           set -eu
           yes | sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # `--workspaces=false` + `unset npm_config_workspace(s)` para manatili sa
-      # mobile/node_modules ang install at maiwasan ang conflict ng npm workspaces
-      # (`--no-workspaces` vs `--workspace`) sa Metro/Expo.
-      - name: Install mobile dependencies
-        working-directory: mobile
+      # Root-level install: ang repo root ang npm workspace root (mobile,
+      # admin-panel, functions), at ang Metro/Expo ay nagre-resolve ng workspace
+      # root sa bundling — kaya DAPAT may node_modules sa repo root. Dati, ang
+      # mobile-only install ay nag-iwan ng root node_modules na wala, kaya
+      # ENOENT sa /home/runner/work/photobooth/photobooth/node_modules sa
+      # :app:createBundleReleaseJsAndAssets.
+      - name: Install JavaScript dependencies (workspace root)
         run: |
           set -eu
-
-          unset npm_config_workspace
-          unset npm_config_workspaces
-
-          npm ci --workspaces=false --no-audit --no-fund
-
-          if [ ! -d node_modules/expo ]; then
-            echo "::error::Expo was not installed in mobile/node_modules"
-            exit 1
-          fi
-
-          node -e "require.resolve('expo/package.json'); console.log('expo resolved OK')"
+          npm ci --no-audit --no-fund
+          node -e "require.resolve('expo/package.json', { paths: ['./mobile'] }); console.log('expo resolvable for mobile workspace OK')"
 
       - name: Ensure Expo assets exist (prebuild prerequisite)
         working-directory: mobile
