@@ -57,10 +57,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -69,18 +69,41 @@ jobs:
             mobile/package.json
 
       - name: Setup Java (JDK ${{ env.JAVA_VERSION }})
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android SDK (non-interactive)
+        uses: android-actions/setup-android@v4
+        with:
+          # Deterministic cmdline-tools (20.0) — hindi umaasa sa kung anong
+          # version ang naka-preinstall sa runner (dati: "Wrong version in
+          # preinstalled sdkmanager").
+          cmdline-tools-version: '14742923'
+          # Tanggapin ang SDK licences SA LOOB ng action nang walang
+          # interaktibong "Review licenses that have not been accepted (y/N)?"
+          # na prompt — ito ang dati nagsasara/ nag-hang sa build.
+          accept-android-sdk-licenses: 'true'
+          log-accepted-android-sdk-licenses: 'false'
+          # Tools lang dito; ang platforms/build-tools ay nasa susunod na step
+          # para malinaw kung saan bumagsak.
+          packages: 'tools platform-tools'
 
-      - name: Install Android SDK packages
+      - name: Accept Android SDK licenses (hard non-interactive guard)
         run: |
+          set -eu
+          # Sinasagot ng `yes` ang interactive na "y/N" review prompt kaya hindi
+          # ito maipit sa runner na walang TTY.
+          # `|| true`: maaaring mamatay ang `yes` sa SIGPIPE kapag huminto na
+          # sa pagbasa ang sdkmanager — normal iyon at hindi dapat mag-fail.
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "Android SDK licences accepted (non-interactive)."
+
+      - name: Install Android SDK packages (non-interactive)
+        run: |
+          set -eu
+          yes | sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       # `npm_config_workspaces=false` para manatili sa mobile/node_modules ang
       # install at maiwasan ang hoisting issue ng npm workspaces sa Metro/Expo.
@@ -142,7 +165,7 @@ jobs:
           sha256sum "$APK_PATH"
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: photobooth-android-${{ env.GRADLE_TASK }}-${{ github.sha }}
           path: mobile/${{ steps.apk.outputs.path }}
