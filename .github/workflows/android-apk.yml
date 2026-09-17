@@ -105,18 +105,24 @@ jobs:
           set -eu
           yes | sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # `npm_config_workspaces=false` para manatili sa mobile/node_modules ang
-      # install at maiwasan ang hoisting issue ng npm workspaces sa Metro/Expo.
+      # `--workspaces=false` + `unset npm_config_workspace(s)` para manatili sa
+      # mobile/node_modules ang install at maiwasan ang conflict ng npm workspaces
+      # (`--no-workspaces` vs `--workspace`) sa Metro/Expo.
       - name: Install mobile dependencies
         working-directory: mobile
-        env:
-          npm_config_workspaces: 'false'
         run: |
-          npm install --no-audit --no-fund
+          set -eu
+
+          unset npm_config_workspace
+          unset npm_config_workspaces
+
+          npm install --workspaces=false --no-audit --no-fund
+
           if [ ! -d node_modules/expo ]; then
-            echo "::error::Hindi ma-install ang expo sa mobile/node_modules"
+            echo "::error::Expo was not installed in mobile/node_modules"
             exit 1
           fi
+
           node -e "require.resolve('expo/package.json'); console.log('expo resolved OK')"
 
       - name: Ensure Expo assets exist (prebuild prerequisite)
