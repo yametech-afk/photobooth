@@ -31,8 +31,7 @@
     "plugins": [
       "expo-camera",
       "expo-image-picker",
-      "expo-media-library",
-      "expo-face-detector"
+      "expo-media-library"
     ],
     "extra": {
       "eas": {

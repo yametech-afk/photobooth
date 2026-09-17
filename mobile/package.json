@@ -27,7 +27,6 @@
     "expo-asset": "~9.0.2",
     "expo-camera": "~14.0.0",
     "expo-clipboard": "~5.0.1",
-    "expo-face-detector": "~12.5.0",
     "expo-file-system": "~16.0.0",
     "expo-font": "~12.0.0",
     "expo-gl": "~13.0.0",
